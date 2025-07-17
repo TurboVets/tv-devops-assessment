@@ -1,0 +1,55 @@
+name: CI/CD to AWS ECR
+
+on:
+  push:
+    branches:
+      - dev
+      - test
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      ECR_REPO_NAME: ${{ secrets.ECR_REPOSITORY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Set image tag
+        id: set_tag
+        run: |
+          if [[ "${GITHUB_REF##*/}" == "dev" ]]; then
+            echo "tag=dev-latest" >> $GITHUB_OUTPUT
+          elif [[ "${GITHUB_REF##*/}" == "test" ]]; then
+            echo "tag=qa-latest" >> $GITHUB_OUTPUT
+          elif [[ "${GITHUB_REF##*/}" == "main" ]]; then
+            echo "tag=prod-latest" >> $GITHUB_OUTPUT
+          else
+            echo "Invalid branch" && exit 1
+          fi
+
+      - name: Build Docker image
+        run: |
+          docker build -t $ECR_REPO_NAME:${{ steps.set_tag.outputs.tag }} .
+
+      - name: Tag and Push Docker image to ECR
+        run: |
+          IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME
+          docker tag $ECR_REPO_NAME:${{ steps.set_tag.outputs.tag }} $IMAGE_URI:${{ steps.set_tag.outputs.tag }}
+          docker push $IMAGE_URI:${{ steps.set_tag.outputs.tag }}
